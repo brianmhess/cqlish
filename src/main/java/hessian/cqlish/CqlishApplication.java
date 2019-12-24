@@ -2,32 +2,25 @@ package hessian.cqlish;
 
 import com.datastax.driver.core.*;
 import com.datastax.driver.core.exceptions.QueryValidationException;
-import com.google.common.collect.Lists;
-import de.vandermeer.asciitable.AT_Row;
-import de.vandermeer.asciitable.AsciiTable;
-import de.vandermeer.asciitable.CWC_LongestWord;
-import de.vandermeer.asciithemes.TA_GridThemes;
-import de.vandermeer.asciithemes.a8.A8_Grids;
-import org.apache.cassandra.thrift.ColumnDef;
-import org.cassandraunit.utils.EmbeddedCassandraServerHelper;
 import org.cassandraunit.utils.RestartableEmbeddedCassandraServerHelper;
-import org.jline.reader.LineReader;
-import org.jline.reader.LineReaderBuilder;
-import org.jline.reader.MaskingCallback;
-import org.jline.reader.impl.history.DefaultHistory;
-import org.jline.terminal.Terminal;
-import org.jline.terminal.TerminalBuilder;
+
+import jline.console.ConsoleReader;
+import jline.console.UserInterruptException;
+import jline.console.history.MemoryHistory;
 
 import java.io.*;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class CqlishApplication {
     private Session session;
     private CodecRegistry codecRegistry;
     private String scriptFile;
-    private LineReader reader;
-    private Terminal terminal;
+    private ConsoleReader reader;
+    private String cql;
 
     public static void main(String[] args) throws Exception {
         CqlishApplication cqlishApplication = new CqlishApplication();
@@ -68,7 +61,62 @@ public class CqlishApplication {
         return true;
     }
 
+    public boolean extractLibs() {
+        String[] libs = {
+                "libsigar-amd64-freebsd-6.so",
+                "libsigar-amd64-linux.so",
+                "libsigar-amd64-solaris.so",
+                "libsigar-ia64-hpux-11.sl",
+                "libsigar-ia64-linux.so",
+                "libsigar-pa-hpux-11.sl",
+                "libsigar-ppc-aix-5.so",
+                "libsigar-ppc-linux.so",
+                "libsigar-ppc64-aix-5.so",
+                "libsigar-ppc64-linux.so",
+                "libsigar-ppc64le-linux.so",
+                "libsigar-s390x-linux.so",
+                "libsigar-sparc-solaris.so",
+                "libsigar-sparc64-solaris.so",
+                "libsigar-universal-macosx.dylib",
+                "libsigar-universal64-macosx.dylib",
+                "libsigar-x86-freebsd-5.so",
+                "libsigar-x86-freebsd-6.so",
+                "libsigar-x86-linux.so",
+                "libsigar-x86-solaris.so",
+                "sigar-amd64-winnt.dll",
+                "sigar-x86-winnt.dll",
+                "sigar-x86-winnt.lib"};
+        String target = System.getenv("user.dir") + "/target";
+        RestartableEmbeddedCassandraServerHelper.mkdir(target);
+        for (String lib : libs) {
+            InputStream is = this.getClass().getResourceAsStream("/libs/" + lib);
+            try {
+                Files.copy(is, Paths.get(target, lib), StandardCopyOption.REPLACE_EXISTING);
+            }
+            catch (IOException ioe) {
+                ioe.printStackTrace();
+                return false;
+            }
+        }
+        try {
+            System.setProperty("java.library.path", target);
+            Field fieldSysPath = ClassLoader.class.getDeclaredField("sys_paths");
+            fieldSysPath.setAccessible(true);
+            fieldSysPath.set(null, null);
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+            return false;
+        }
+        if (null == System.getProperty("cassandra.jmx.local.port"))
+            System.setProperty("cassandra.jmx.local.port", "7199");
+
+        return true;
+    }
+
     public boolean setup() throws Exception {
+        if (!extractLibs())
+            return false;
         System.out.print("Starting embedded Cassandra... ");
         RestartableEmbeddedCassandraServerHelper.startEmbeddedCassandra();
         session = RestartableEmbeddedCassandraServerHelper.getSession();
@@ -89,27 +137,34 @@ public class CqlishApplication {
         return doRepl();
     }
 
+    public void help() {
+        System.out.println(" Enter CQL and end the CQL statment with a semicolon ';'.");
+        System.out.println(" You can have multi-line CQL statements, just hit Enter mid-statement");
+        System.out.println(" You end the statement with a semicolon.");
+        System.out.println(" CTRL-C will clear the current CQL statement.");
+        System.out.println(" To exit, type 'exit' or 'quit' (case does not matter)");
+    }
+
     public boolean doRepl() throws Exception {
-        terminal = TerminalBuilder.builder()
-                .system(true)
-                .streams(System.in, System.out)
-                .name("cqlish")
-                .build();
+        reader = new ConsoleReader();
+        reader.setHandleUserInterrupt(true);
+        reader.setHistory(new MemoryHistory());
+        reader.setHistoryEnabled(true);
+
         String firstPrompt = "cqlish> ";
         String continuedPrompt = "   ===> ";
-        System.out.println(terminal.getName() + ": " + terminal.getType());
-
-        DefaultHistory history = new DefaultHistory();
-        reader = LineReaderBuilder.builder()
-                .terminal(terminal)
-                .variable(LineReader.INDENTATION, 2)
-                .history(history)
-                .build();
-
-        String cql = "";
+        cql = "";
         while (true) {
             String prompt = cql.isEmpty() ? firstPrompt : continuedPrompt;
-            String line = reader.readLine(prompt, "", (MaskingCallback) null, null);
+            String line;
+
+            try {
+                line = reader.readLine(prompt);
+            }
+            catch (UserInterruptException uie) {
+                cql = "";
+                continue;
+            }
             line = line.trim();
 
             if (line.equalsIgnoreCase("quit")
@@ -118,9 +173,9 @@ public class CqlishApplication {
                     || line.equalsIgnoreCase("exit;"))
                 break;
 
-            if (line.endsWith("%%")) {
-                System.out.println(" ... clearing buffer");
-                cql = "";
+            if (line.equalsIgnoreCase("help")
+                    || (line.equalsIgnoreCase("help;"))) {
+                help();
                 continue;
             }
 
@@ -353,20 +408,16 @@ public class CqlishApplication {
                 }
             }
         }
+        System.out.println("ERROR: bad describe command: " + input);
         return true;
     }
 
     public void describeKeyspaces(PrintStream out) {
         System.out.println(" ==> DESCRIBE KEYSPACES");
-        /*List<List<String>> keyspaces =*/ session.getCluster()
+        session.getCluster()
                 .getMetadata()
                 .getKeyspaces()
                 .forEach(km -> System.out.println(" " + km.getName()));
-        /*
-                .stream()
-                .map(km -> Lists.newArrayList(km.getName()))
-                .collect(Collectors.toList());
-                */
         System.out.println();
     }
 
@@ -374,17 +425,11 @@ public class CqlishApplication {
         if (null == session.getCluster().getMetadata().getKeyspace(keyspace))
             System.out.println("ERROR: keyspace (" + keyspace + ") not found");
         System.out.println(" ==> DESCRIBE TABLES");
-        /*List<List<String>> tables =*/ session.getCluster()
+        session.getCluster()
                 .getMetadata()
                 .getKeyspace(keyspace)
                 .getTables()
                 .forEach(tm -> System.out.println(" " + tm.getName()));
-                /*.stream()
-                .map(tm -> Lists.newArrayList(tm.getName()))
-                .collect(Collectors.toList());
-        List<String> header = Lists.newArrayList(new String("Table"));
-        prettyPrint(header, tables, out);
-        */
         System.out.println();
     }
 
@@ -401,7 +446,6 @@ public class CqlishApplication {
         }
         System.out.println(" ==> DESCRIBE TABLE");
         System.out.println(tm.exportAsString());
-        //System.out.println(tm.asCQLQuery());
         System.out.println();
     }
 

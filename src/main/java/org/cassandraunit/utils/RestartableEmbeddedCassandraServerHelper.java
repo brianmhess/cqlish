@@ -337,7 +337,7 @@ public class RestartableEmbeddedCassandraServerHelper {
      *
      * @param dir
      */
-    private static void mkdir(String dir) {
+    public static void mkdir(String dir) {
         File dirFile = new File(dir);
         if (!dirFile.exists() && !dirFile.mkdirs()) {
             throw new FSWriteError(new IOException("Failed to mkdirs " + dir), dir);
