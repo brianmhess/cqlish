@@ -5,7 +5,7 @@
 
     <groupId>hessian</groupId>
     <artifactId>cqlish</artifactId>
-    <version>0.0.1</version>
+    <version>0.0.2</version>
     <name>cqlish</name>
     <description>Embedded CQL shell</description>
 

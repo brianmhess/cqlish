@@ -16,11 +16,23 @@ import java.nio.file.StandardCopyOption;
 import java.util.*;
 
 public class CqlishApplication {
+    private String version = "0.0.2";
     private Session session;
     private CodecRegistry codecRegistry;
     private String scriptFile;
     private ConsoleReader reader;
     private String cql;
+    private boolean resetCassandra = false;
+
+    public static String usage() {
+        return "cqlish [-reset <true/false>] [-f <scriptfile>]" +
+                " Options:" +
+                "   -f <scriptfile>       Will execute CQL commands from script file." +
+                "                           One CQL command per line." +
+                "                           Comment lines beginning with #." +
+                "   -reset <true/false>   If reset is true then all data/tables/keyspaces will be reset." +
+                "                           Default is false.";
+    }
 
     public static void main(String[] args) throws Exception {
         CqlishApplication cqlishApplication = new CqlishApplication();
@@ -44,7 +56,8 @@ public class CqlishApplication {
         for (int i = 0; i < args.length; i += 2) {
             amap.put(args[i], args[i + 1]);
         }
-        if (null != (tkey = amap.remove("-f"))) scriptFile = tkey;
+        if (null != (tkey = amap.remove("-f")))     scriptFile = tkey;
+        if (null != (tkey = amap.remove("-reset"))) resetCassandra = Boolean.parseBoolean(tkey);
 
         return validateArgs();
     }
@@ -86,7 +99,7 @@ public class CqlishApplication {
                 "sigar-amd64-winnt.dll",
                 "sigar-x86-winnt.dll",
                 "sigar-x86-winnt.lib"};
-        String target = System.getenv("user.dir") + "/target";
+        String target = System.getProperty("user.dir") + "/target/libs";
         RestartableEmbeddedCassandraServerHelper.mkdir(target);
         for (String lib : libs) {
             InputStream is = this.getClass().getResourceAsStream("/libs/" + lib);
@@ -115,48 +128,115 @@ public class CqlishApplication {
     }
 
     public boolean setup() throws Exception {
+        reader = new ConsoleReader();
+        reader.setHandleUserInterrupt(true);
+        reader.setHistory(new MemoryHistory());
+        reader.setHistoryEnabled(true);
+        printSplash();
+
         if (!extractLibs())
             return false;
-        System.out.print("Starting embedded Cassandra... ");
+        reader.print(colorWrap(ANSI_YELLOW, "Starting embedded Cassandra... "));
+        if (resetCassandra)
+            RestartableEmbeddedCassandraServerHelper.rmdir(RestartableEmbeddedCassandraServerHelper.DEFAULT_TMP_DIR);
         RestartableEmbeddedCassandraServerHelper.startEmbeddedCassandra();
         session = RestartableEmbeddedCassandraServerHelper.getSession();
-        System.out.println(" started");
+        reader.println(colorWrap(ANSI_GREEN, " started"));
+        reader.flush();
         codecRegistry = session.getCluster().getConfiguration().getCodecRegistry();
 
         return true;
     }
 
     public boolean run(String[] args) throws Exception {
-        if (!parseArgs(args))
+        if (!parseArgs(args)) {
+            System.err.println(usage());
             return false;
+        }
         if (!setup())
             return false;
-        if (!processScriptFile())
+        if (!processScriptFile(scriptFile))
             return false;
 
         return doRepl();
     }
 
-    public void help() {
-        System.out.println(" Enter CQL and end the CQL statment with a semicolon ';'.");
-        System.out.println(" You can have multi-line CQL statements, just hit Enter mid-statement");
-        System.out.println(" You end the statement with a semicolon.");
-        System.out.println(" CTRL-C will clear the current CQL statement.");
-        System.out.println(" To exit, type 'exit' or 'quit' (case does not matter)");
+    public void help() throws IOException {
+        String help = " Enter CQL and end the CQL statment with a semicolon ';'.\n" +
+                " You can have multi-line CQL statements, just hit Enter mid-statement\n" +
+                " You end the statement with a semicolon.\n" +
+                " CTRL-C will clear the current CQL statement.\n" +
+                " Some cqlish commands (case does not matter):\n" +
+                "   HELP            this message\n" +
+                "   EXIT, QUIT      exits cqlish\n" +
+                "   CLEAR           clears the screen\n" +
+                "   SOURCE <file>   executes the CQL commands in the supplied file\n";
+        reader.println(colorWrap(ANSI_YELLOW, help));
+        reader.flush();
+    }
+
+    public void info() throws IOException {
+        String info = " Info:\n" +
+                "   Version: " + version + "\n" +
+                "   Terminal: " + reader.getTerminal().toString() + "\n" +
+                "   Terminal supports ANSI: " + reader.getTerminal().isAnsiSupported() + "\n" +
+                "   Terminal output encoding: " + reader.getTerminal().getOutputEncoding() + "\n";
+        reader.println(colorWrap(ANSI_YELLOW, info));
+        reader.flush();
+    }
+
+    public String colorWrap(String color, String string) {
+        String prefix = reader.getTerminal().isAnsiSupported() ? color : "";
+        String suffix = reader.getTerminal().isAnsiSupported() ? ANSI_RESET : "";
+        return prefix + string + suffix;
+    }
+
+    public String firstPrompt() {
+        String firstPrompt = "cqlish:";
+        if (null != session.getLoggedKeyspace())
+            firstPrompt = firstPrompt + session.getLoggedKeyspace();
+        return firstPrompt + "> ";
+    }
+
+    public String continuedPrompt() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < firstPrompt().length() - 5; i++)
+            sb.append(" ");
+        sb.append("===> ");
+        return sb.toString();
+    }
+
+    public void printSplash() throws IOException {
+        String[][] colors = {
+                {ANSI_WHITE, ANSI_WHITE, ANSI_WHITE, ANSI_WHITE, ANSI_WHITE, ANSI_WHITE},
+                {ANSI_RED, ANSI_RED, ANSI_RED, ANSI_RED, ANSI_RED, ANSI_RED},
+                {ANSI_YELLOW, ANSI_YELLOW, ANSI_YELLOW, ANSI_YELLOW, ANSI_YELLOW, ANSI_YELLOW},
+                {ANSI_GREEN, ANSI_GREEN, ANSI_GREEN, ANSI_GREEN, ANSI_GREEN, ANSI_GREEN},
+                {ANSI_CYAN, ANSI_CYAN, ANSI_CYAN, ANSI_CYAN, ANSI_CYAN, ANSI_CYAN},
+                {ANSI_BLUE, ANSI_BLUE, ANSI_BLUE, ANSI_BLUE, ANSI_BLUE, ANSI_BLUE},
+                {ANSI_MAGENTA, ANSI_MAGENTA, ANSI_MAGENTA, ANSI_MAGENTA, ANSI_MAGENTA, ANSI_MAGENTA},
+                {ANSI_RED, ANSI_YELLOW, ANSI_GREEN, ANSI_CYAN, ANSI_BLUE, ANSI_MAGENTA},
+                {ANSI_BLUE, ANSI_BLUE, ANSI_CYAN, ANSI_CYAN, ANSI_WHITE, ANSI_WHITE}
+        };
+        int color = (int)(System.currentTimeMillis() % colors.length);
+        reader.println("" +
+                colors[color][0] +     "              ___      __  \n" +
+                colors[color][1] +  "  _________ _/ (_)____/ /_ \n" +
+                colors[color][2] +   " / ___/ __ `/ / / ___/ __ \\\n" +
+                colors[color][3] +    "/ /__/ /_/ / / (__  ) / / /\n" +
+                colors[color][4] +    "\\___/\\__, /_/_/____/_/ /_/ \n" +
+                colors[color][5] + "       /_/                 " +
+                ANSI_RESET);
+        reader.println("Welcome to cqlish (version " + version + "). Type HELP for some help\n");
+        reader.flush();
     }
 
     public boolean doRepl() throws Exception {
-        reader = new ConsoleReader();
-        reader.setHandleUserInterrupt(true);
-        reader.setHistory(new MemoryHistory());
-        reader.setHistoryEnabled(true);
-
-        String firstPrompt = "cqlish> ";
-        String continuedPrompt = "   ===> ";
         cql = "";
+        Writer writer = reader.getOutput();
         while (true) {
-            String prompt = cql.isEmpty() ? firstPrompt : continuedPrompt;
-            String line;
+            String prompt = colorWrap(ANSI_CYAN, cql.isEmpty() ? firstPrompt() : continuedPrompt());
+            String line = null;
 
             try {
                 line = reader.readLine(prompt);
@@ -165,17 +245,34 @@ public class CqlishApplication {
                 cql = "";
                 continue;
             }
+            if (null == line) {
+                break;
+            }
+
             line = line.trim();
 
             if (line.equalsIgnoreCase("quit")
                     || line.equalsIgnoreCase("quit;")
                     || line.equalsIgnoreCase("exit")
-                    || line.equalsIgnoreCase("exit;"))
+                    || line.equalsIgnoreCase("exit;")) {
                 break;
+            }
 
             if (line.equalsIgnoreCase("help")
                     || (line.equalsIgnoreCase("help;"))) {
                 help();
+                continue;
+            }
+
+            if (line.equalsIgnoreCase("info")
+                    || (line.equalsIgnoreCase("info;"))) {
+                info();
+                continue;
+            }
+
+            if (line.equalsIgnoreCase("clear")
+                    || (line.equalsIgnoreCase("clear;"))) {
+                reader.clearScreen();
                 continue;
             }
 
@@ -184,58 +281,64 @@ public class CqlishApplication {
                 continue;
             }
 
-            executeAndPrintCql(session, cql, System.out);
+            executeAndPrintCql(session, cql);
             cql = "";
         }
 
+        reader.println(colorWrap(ANSI_YELLOW, "\nExiting...."));
+        reader.flush();
         return true;
     }
 
-    public boolean processScriptFile() {
-        if (null == scriptFile)
+    public boolean processScriptFile(String file) throws IOException {
+        if (null == file)
             return true;
 
-        File infile = new File(scriptFile);
+        File infile = new File(file);
         Scanner scanner;
         try {
             scanner = new Scanner(new FileInputStream(infile));
         } catch (FileNotFoundException fe) {
-            System.err.println("Could not find file " + scriptFile);
+            reader.println(colorWrap(ANSI_RED, "ERROR: Could not find file " + file));
+            reader.flush();
             return false;
         }
 
-        System.out.println("Processing scriptfile");
+        reader.println(colorWrap(ANSI_YELLOW,"Processing scriptfile " + file + ":"));
+        reader.flush();
         while (scanner.hasNext()) {
             String line = scanner.nextLine();
             line = line.trim();
             if (line.startsWith("#"))
                 continue;
-            executeCql(session, line, System.out);
+            executeCql(session, line);
         }
-        System.out.println("Finished processing scriptfile");
+        reader.println(colorWrap(ANSI_YELLOW, "Finished processing scriptfile"));
+        reader.flush();
         return true;
     }
 
-    public ResultSet executeCql(Session session, String cql, PrintStream out) {
-        out.println(" ==> \"" + cql + "\"");
+    public ResultSet executeCql(Session session, String cql) throws IOException {
+        reader.println(colorWrap(ANSI_YELLOW, " ==> " + cql));
+        reader.flush();
         ResultSet resultSet;
         try {
             resultSet = session.execute(cql);
         } catch (QueryValidationException qve) {
-            out.println("Invalid Query: " + qve.getMessage());
-            out.flush();
+            reader.println(colorWrap(ANSI_RED, "Invalid Query: " + qve.getMessage()));
+            reader.flush();
             return null;
         }
 
         return resultSet;
     }
 
-    public void executeAndPrintCql(Session session, String cql, PrintStream out) {
+    public void executeAndPrintCql(Session session, String cql) throws IOException {
         cql = cql.trim();
-        if (handleSpecialCommands(cql, out))
+        if (handleSpecialCommands(cql))
             return;
         long begin = System.currentTimeMillis();
-        ResultSet resultSet = executeCql(session, cql, out);
+        ResultSet resultSet = executeCql(session, cql);
         long end = System.currentTimeMillis();
         long elapsed = end - begin;
 
@@ -244,13 +347,13 @@ public class CqlishApplication {
             return;
 
         if (resultSet.isExhausted()) {
-            out.println("Ok");
-            out.flush();
+            reader.println("Ok");
+            reader.flush();
         } else {
-            prettyPrint(resultSet, out);
+            prettyPrint(resultSet);
         }
-        out.println("\n Elapsed time: " + elapsed + " ms\n");
-        out.flush();
+        reader.println("\n Elapsed time: " + elapsed + " ms\n");
+        reader.flush();
     }
 
     public static final String ANSI_RESET = "\u001B[0m";
@@ -259,11 +362,14 @@ public class CqlishApplication {
     public static final String ANSI_GREEN = "\u001B[32m";
     public static final String ANSI_YELLOW = "\u001B[33m";
     public static final String ANSI_BLUE = "\u001B[34m";
-    public static final String ANSI_PURPLE = "\u001B[35m";
+    public static final String ANSI_MAGENTA = "\u001B[35m";
     public static final String ANSI_CYAN = "\u001B[36m";
     public static final String ANSI_WHITE = "\u001B[37m";
 
-    public void prettyPrint(ResultSet resultSet, PrintStream out) {
+    public void prettyPrint(ResultSet resultSet) throws IOException {
+        String header_color_begin = (reader.getTerminal().isAnsiSupported()) ? ANSI_GREEN : "";
+        String null_color_begin = (reader.getTerminal().isAnsiSupported()) ? ANSI_MAGENTA : "";
+        String color_reset = (reader.getTerminal().isAnsiSupported()) ? ANSI_RESET : "";
         List<ColumnDefinitions.Definition> cdefs = resultSet.getColumnDefinitions().asList();
         int numCols = cdefs.size();
         List<String> columnNames = new ArrayList<String>(numCols);
@@ -278,185 +384,186 @@ public class CqlishApplication {
         for (Row r : resultSet) {
             List<String> row = new ArrayList<String>(numCols);
             for (int i = 0; i < numCols; i++) {
-                String cell = codecRegistry.codecFor(cdefs.get(i).getType()).format(r.get(i, codecRegistry.codecFor(cdefs.get(i).getType())));
-                if (cell.length() > longest.get(i))
-                    longest.set(i, cell.length());
+                String cell = r.isNull(i) ? null : codecRegistry.codecFor(cdefs.get(i).getType()).format(r.get(i, codecRegistry.codecFor(cdefs.get(i).getType())));
+                int len = r.isNull(i) ? 4 : cell.length();
+                if (len > longest.get(i))
+                    longest.set(i, len);
                 row.add(cell);
             }
             rows.add(row);
         }
 
-        StringBuilder fmt = new StringBuilder(" %" + longest.get(0) + "." + longest.get(0) + "s ");
-        StringBuilder fmt2 = new StringBuilder(" " + ANSI_CYAN + "%" + longest.get(0) + "." + longest.get(0) + "s" + ANSI_RESET + " ");
+        StringBuilder fmt2 = new StringBuilder(" " + header_color_begin + "%" + longest.get(0) + "." + longest.get(0) + "s" + color_reset + " ");
         StringBuilder sepline = new StringBuilder();
         for (int j = 0; j < longest.get(0) + 2; j++)
             sepline.append("-");
         for (int i = 1; i < longest.size(); i++) {
-            fmt.append("| %" + longest.get(i) + "." + longest.get(i) + "s ");
-            fmt2.append("| " + ANSI_CYAN + "%" + longest.get(i) + "." + longest.get(i) + "s" + ANSI_RESET + " ");
+            fmt2.append("| " + header_color_begin + "%" + longest.get(i) + "." + longest.get(i) + "s" + color_reset + " ");
             sepline.append("+");
             for (int j = 0; j < longest.get(i) + 2; j++)
                 sepline.append("-");
         }
 
-        System.out.println(String.format(fmt2.toString(), columnNames.toArray()));
-        System.out.println(sepline.toString());
-        for (int i = 0; i < rows.size(); i++)
-            System.out.println(String.format(fmt.toString(), rows.get(i).toArray()));
-
-    }
-
-
-    public void prettyPrint(List<String> header, List<List<String>> rows, List<Integer> longest, PrintStream out) {
-        StringBuilder fmt = new StringBuilder(" %" + longest.get(0) + "." + longest.get(0) + "s ");
-        StringBuilder fmt2 = new StringBuilder(" " + ANSI_CYAN + "%" + longest.get(0) + "." + longest.get(0) + "s" + ANSI_RESET + " ");
-        StringBuilder sepline = new StringBuilder();
-        for (int j = 0; j < longest.get(0) + 2; j++)
-            sepline.append("-");
-        for (int i = 1; i < longest.size(); i++) {
-            fmt.append("| %" + longest.get(i) + "." + longest.get(i) + "s ");
-            fmt2.append("| " + ANSI_CYAN + "%" + longest.get(i) + "." + longest.get(i) + "s" + ANSI_RESET + " ");
-            sepline.append("+");
-            for (int j = 0; j < longest.get(i) + 2; j++)
-                sepline.append("-");
-        }
-
-        System.out.println(String.format(fmt2.toString(), header.toArray()));
-        System.out.println(sepline.toString());
-        for (int i = 0; i < rows.size(); i++)
-            System.out.println(String.format(fmt.toString(), rows.get(i).toArray()));
-
-    }
-
-    public void prettyPrint(List<String> header, List<List<String>> rows, PrintStream out) {
-        List<Integer> longest = new ArrayList<Integer>(header.size());
-        for (int i = 0; i < header.size(); i++)
-            longest.add(header.get(i).length());
+        reader.println(String.format(fmt2.toString(), columnNames.toArray()));
+        reader.println(sepline.toString());
         for (int i = 0; i < rows.size(); i++) {
             List<String> row = rows.get(i);
-            if (row.size() != longest.size()) {
-                System.out.println("ERROR: row is a different length than the header");
-                return;
+            StringBuilder fmt = new StringBuilder();
+            if (null == row.get(0))
+                fmt.append(" " + null_color_begin + "%" + longest.get(0) + "." + longest.get(0) + "s " + color_reset);
+            else
+                fmt.append(" "                 + "%" + longest.get(0) + "." + longest.get(0) + "s ");
+            for (int j = 1; j < longest.size(); j++) {
+                if (null == row.get(j))
+                    fmt.append("| " + null_color_begin + "%" + longest.get(j) + "." + longest.get(j) + "s " + color_reset);
+                else
+                    fmt.append("| "                 + "%" + longest.get(j) + "." + longest.get(j) + "s ");
             }
-            for (int j = 0; j < row.size(); j++) {
-                if (row.get(i).length() > longest.get(i))
-                    longest.set(i, row.get(i).length());
-            }
+            reader.println(String.format(fmt.toString(), rows.get(i).toArray()));
         }
-        prettyPrint(header, rows, longest, out);
+        reader.flush();
     }
 
-    public boolean handleSpecialCommands(String input, PrintStream out) {
+    public boolean handleSpecialCommands(String input) throws IOException {
         input = input.substring(0, input.length()-1);
         String[] pieces = input.split("\\s+");
         String cmd = pieces[0];
         if ((cmd.equalsIgnoreCase("desc")) || (cmd.equalsIgnoreCase("describe"))) {
-            return handleDescribe(input, pieces, out);
+            return handleDescribe(input, pieces);
+        }
+        if (cmd.equalsIgnoreCase("source")) {
+            return handleSource(input, pieces);
         }
         return false;
     }
 
-    public boolean handleDescribe(String input, String[] pieces, PrintStream out) {
+    public boolean handleDescribe(String input, String[] pieces) throws IOException {
         if (pieces.length < 2) {
-            System.out.println("ERROR: bad describe: " + input);
+            reader.println(colorWrap(ANSI_RED, "ERROR: bad describe: " + input));
+            reader.flush();
             return true;
         }
         if (pieces[1].equalsIgnoreCase("keyspaces")) {
-            describeKeyspaces(out);
+            describeKeyspaces();
             return true;
         }
         if (pieces[1].equalsIgnoreCase("tables")) {
             if (pieces.length > 2) {
-                describeTables(pieces[2], out);
+                describeTables(pieces[2]);
                 return true;
             }
             else {
                 if (null != session.getLoggedKeyspace()) {
-                    describeTables(session.getLoggedKeyspace(), out);
+                    describeTables(session.getLoggedKeyspace());
                     return true;
                 }
                 else {
-                    System.out.println("ERROR: must specify keyspace to list tables");
+                    reader.println(colorWrap(ANSI_RED, "ERROR: must specify keyspace to list tables"));
+                    reader.flush();
                     return true;
                 }
             }
         }
         if (pieces[1].equalsIgnoreCase("table")) {
             if (pieces.length < 3) {
-                System.out.println("ERROR: must specify table");
+                reader.println(colorWrap(ANSI_RED, "ERROR: must specify table"));
+                reader.flush();
                 return true;
             }
             else {
                 if (pieces.length > 3) {
-                    describeTable(pieces[2], pieces[3], out);
+                    describeTable(pieces[2], pieces[3]);
                     return true;
                 }
                 else {
                     if (pieces[2].contains(".")) {
-                        describeTable(pieces[2], out);
+                        describeTable(pieces[2]);
                         return true;
                     }
                     else {
                         String keyspace = session.getLoggedKeyspace();
                         if (null == keyspace) {
-                            System.err.println("ERROR: bad describe table command: " + input);
+                            reader.println(colorWrap(ANSI_RED, "ERROR: bad describe table command: " + input));
+                            reader.flush();
                             return true;
                         }
-                        describeTable(keyspace, pieces[2], out);
+                        describeTable(keyspace, pieces[2]);
                         return true;
                     }
                 }
             }
         }
-        System.out.println("ERROR: bad describe command: " + input);
+        reader.println(colorWrap(ANSI_RED, "ERROR: bad describe command: " + input));
+        reader.flush();
         return true;
     }
 
-    public void describeKeyspaces(PrintStream out) {
-        System.out.println(" ==> DESCRIBE KEYSPACES");
-        session.getCluster()
-                .getMetadata()
-                .getKeyspaces()
-                .forEach(km -> System.out.println(" " + km.getName()));
-        System.out.println();
+    public void describeKeyspaces() throws IOException {
+        reader.println(colorWrap(ANSI_YELLOW, " ==> DESCRIBE KEYSPACES"));
+        for (KeyspaceMetadata km : session.getCluster().getMetadata().getKeyspaces()) {
+            reader.println(" " + km.getName());
+        }
+        reader.println();
+        reader.flush();
     }
 
-    public void describeTables(String keyspace, PrintStream out) {
+    public void describeTables(String keyspace) throws IOException {
         if (null == session.getCluster().getMetadata().getKeyspace(keyspace))
-            System.out.println("ERROR: keyspace (" + keyspace + ") not found");
-        System.out.println(" ==> DESCRIBE TABLES");
-        session.getCluster()
-                .getMetadata()
-                .getKeyspace(keyspace)
-                .getTables()
-                .forEach(tm -> System.out.println(" " + tm.getName()));
-        System.out.println();
+            reader.println(colorWrap(ANSI_RED, "ERROR: keyspace (" + keyspace + ") not found"));
+        reader.println(colorWrap(ANSI_YELLOW, " ==> DESCRIBE TABLES"));
+        for (TableMetadata tm : session.getCluster().getMetadata().getKeyspace(keyspace).getTables()) {
+            reader.println(" " + tm.getName());
+        }
+        reader.println();
+        reader.flush();
     }
 
-    public void describeTable(String keyspace, String table, PrintStream out) {
+    public void describeTable(String keyspace, String table) throws IOException {
         KeyspaceMetadata km = session.getCluster().getMetadata().getKeyspace(keyspace);
         if (null == km) {
-            System.out.println("ERROR: keyspace (" + keyspace + ") not found");
+            reader.println(colorWrap(ANSI_RED, "ERROR: keyspace (" + keyspace + ") not found"));
+            reader.flush();
             return;
         }
         TableMetadata tm = km.getTable(table);
         if (null == tm) {
-            System.out.println("ERROR: table (" + keyspace + "." + table + ") not found");
+            reader.println(colorWrap(ANSI_RED, "ERROR: table (" + keyspace + "." + table + ") not found"));
+            reader.flush();
             return;
         }
-        System.out.println(" ==> DESCRIBE TABLE");
-        System.out.println(tm.exportAsString());
-        System.out.println();
+        reader.println(colorWrap(ANSI_YELLOW, " ==> DESCRIBE TABLE"));
+        reader.println(tm.exportAsString());
+        reader.println();
+        reader.flush();
     }
 
-    public void describeTable(String keyspacetable, PrintStream out) {
-        String[] pieces = keyspacetable.split(".");
+    public void describeTable(String keyspacetable) throws IOException {
+        String[] pieces = keyspacetable.split("\\.");
         if (pieces.length != 2) {
-            System.out.println("ERROR: poorly formatted table (" + keyspacetable + ")");
+            reader.println(colorWrap(ANSI_RED, "ERROR: poorly formatted table (" + keyspacetable + ")"));
+            reader.flush();
             return;
         }
         String keyspace = pieces[0];
         String table = pieces[1];
-        describeTable(keyspace, table, out);
+        describeTable(keyspace, table);
+    }
+
+    public boolean handleSource(String input, String[] pieces) throws IOException {
+        if (2 > pieces.length) {
+            reader.println(colorWrap(ANSI_RED, "ERROR: must supply filename"));
+            reader.flush();
+            return true;
+        }
+        String file = pieces[1];
+        for (int i = 2; i < pieces.length; i++)
+            file = file + " " + pieces[i];
+        if (file.startsWith("'") && file.endsWith("'"))
+            file = file.substring(1, file.length() - 1);
+        if (file.startsWith("\"") && file.endsWith("\""))
+            file = file.substring(1, file.length() - 1);
+
+        processScriptFile(file);
+        return true;
     }
 }

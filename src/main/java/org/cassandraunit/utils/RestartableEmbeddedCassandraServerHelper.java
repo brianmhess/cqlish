@@ -311,7 +311,7 @@ public class RestartableEmbeddedCassandraServerHelper {
         }
     }
 
-    private static void rmdir(String dir) {
+    public static void rmdir(String dir) {
         deleteRecursive(new File(dir));
     }
 
@@ -344,7 +344,7 @@ public class RestartableEmbeddedCassandraServerHelper {
         }
     }
 
-    private static void cleanupAndLeaveDirs() throws IOException {
+    public static void cleanupAndLeaveDirs() throws IOException {
         mkdirs();
         cleanup();
         mkdirs();
@@ -352,7 +352,7 @@ public class RestartableEmbeddedCassandraServerHelper {
         commitLog.resetUnsafe(true); // cleanup screws w/ CommitLog, this brings it back to safe state
     }
 
-    private static void makeOrLeaveDirs() throws IOException {
+    public static void makeOrLeaveDirs() throws IOException {
         mkdirs();
         CommitLog commitLog = CommitLog.instance;
         commitLog.resetUnsafe(true); // cleanup screws w/ CommitLog, this brings it back to safe state
